@@ -13,7 +13,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../webroot',
+    outDir: '../module/webroot',
     emptyOutDir: true,
   },
 })

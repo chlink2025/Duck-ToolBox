@@ -18,10 +18,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  module-zip:
-    name: Module Zip
+  ci:
+    name: CI
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    environment: ${{ github.event_name == 'push' && 'Telegram' || '' }}
 
     steps:
       - name: Checkout
@@ -84,6 +85,7 @@ jobs:
 
       - name: Verify module file line endings
         shell: bash
+        working-directory: module
         run: |
           set -euo pipefail
 
@@ -96,55 +98,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(grep '^version=' module.prop | cut -d= -f2)"
-          stage="$RUNNER_TEMP/module"
-          dist="$GITHUB_WORKSPACE/dist"
+          version="$(grep '^version=' module/module.prop | cut -d= -f2)"
 
-          rm -rf "$stage" "$dist"
-          mkdir -p "$stage/bin" "$stage/webroot" "$dist"
+          cp README.md module/
+          cp duckd/target/${{ env.TARGET }}/release/duckd module/bin/duckd
 
-          cp module.prop README.md LICENSE customize.sh service.sh skip_mount "$stage"/
-          if [ -f update.json ]; then
-            cp update.json "$stage"/
-          fi
-          cp bin/duckctl.sh "$stage/bin/duckctl.sh"
-          cp duckd/target/${{ env.TARGET }}/release/duckd "$stage/bin/duckd"
-          cp -R webroot/. "$stage/webroot/"
+          chmod 755 module/bin/duckd
 
-          chmod 755 "$stage/bin/duckctl.sh" "$stage/bin/duckd"
-
-          archive="$dist/${MODULE_ID}-${version}.zip"
-          (
-            cd "$stage"
-            zip -r "$archive" .
-          )
-
-          echo "MODULE_ARCHIVE=$archive" >> "$GITHUB_ENV"
-
-      - name: Upload module artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: duck-toolbox-module-zip
-          path: ${{ env.MODULE_ARCHIVE }}
-          if-no-files-found: error
-          retention-days: 14
-
-  push-telegram:
-    name: Push To Telegram
-    if: github.event_name == 'push'
-    needs: module-zip
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: Telegram
-
-    steps:
-      - name: Download module artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: duck-toolbox-module-zip
-          path: telegram-artifact
+          archive="dist/${{ env.MODULE_ID }}-${version}.zip"
+          echo "MODULE_PATH=$archive" >> $GITHUB_ENV
+          mkdir -p dist
+          cd module
+          zip -r "../$archive" .
 
       - name: Push module zip to Telegram
+        if: github.event_name == 'push'
         shell: bash
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
@@ -162,19 +130,13 @@ jobs:
             exit 1
           fi
 
-          artifact_path="$(find telegram-artifact -maxdepth 2 -type f -name '*.zip' | head -n 1)"
-          if [ -z "$artifact_path" ] || [ ! -f "$artifact_path" ]; then
-            echo "Module artifact was not downloaded successfully." >&2
-            exit 1
-          fi
-
-          caption="$(python3 .github/workflows/scripts/telegram.py build-caption --artifact-path "${artifact_path}")"
+          caption="$(python3 .github/workflows/scripts/telegram.py build-caption --artifact-path "${{ env.MODULE_PATH }}")"
 
           response_file="$(mktemp)"
           http_code=$(curl --silent --show-error --output "${response_file}" --write-out "%{http_code}" \
             -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
             -F "chat_id=${TELEGRAM_CHAT_ID}" \
-            -F "document=@${artifact_path}" \
+            -F "document=@${{ env.MODULE_PATH }}" \
             -F "parse_mode=HTML" \
             --form-string "caption=${caption}")
 

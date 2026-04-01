@@ -2,11 +2,10 @@
 /duckd/target/
 /ui/node_modules/
 /ui/.vite/
-/webroot/
+/module/webroot/
 /var/
-/dist/
-/bin/duckd
-/bin/duckd.exe
+module/bin/duckd
+module/bin/duckd.exe
 *.zip
 
 # Editor files
