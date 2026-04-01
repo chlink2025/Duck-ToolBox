@@ -122,7 +122,7 @@ if (-not $SkipWeb) {
     }
   }
 
-  $webrootIndex = Join-Path $repoRoot "webroot\index.html"
+  $webrootIndex = Join-Path $repoRoot "module\webroot\index.html"
   if (-not (Test-Path $webrootIndex)) {
     throw "Expected WebUI output was not produced at '$webrootIndex'."
   }
