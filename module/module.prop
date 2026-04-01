@@ -4,3 +4,4 @@ version=v0.0.1-beta
 versionCode=1
 author=Eltavine & MhmRdd
 description=Android toolbox
+updateJson=https://raw.githubusercontent.com/eltavine/Duck-ToolBox/main/update.json
