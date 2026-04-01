@@ -10,8 +10,8 @@ permissions:
 
 env:
   MODULE_ID: duck-toolbox
-  NDK_VERSION: 29.0.13846066
   ANDROID_API_LEVEL: 21
+  TARGET: aarch64-linux-android
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -25,62 +25,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses > /dev/null
-
-      - name: Install Android NDK
-        run: sdkmanager "ndk;${NDK_VERSION}"
-
-      - name: Export Android NDK environment
-        run: |
-          set -euo pipefail
-          ndk_root="$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}"
-          toolchain_bin="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          android_clang="$toolchain_bin/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
-          android_clangxx="$toolchain_bin/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
-          llvm_ar="$toolchain_bin/llvm-ar"
-
-          if [ ! -d "$ndk_root" ]; then
-            echo "Android NDK was not installed at $ndk_root" >&2
-            exit 1
-          fi
-
-          if [ ! -x "$android_clang" ]; then
-            echo "Android clang was not found at $android_clang" >&2
-            exit 1
-          fi
-
-          if [ ! -x "$llvm_ar" ]; then
-            echo "llvm-ar was not found at $llvm_ar" >&2
-            exit 1
-          fi
-
-          echo "ANDROID_NDK_ROOT=$ndk_root" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ndk_root" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK=$ndk_root" >> "$GITHUB_ENV"
-          echo "CC_aarch64_linux_android=$android_clang" >> "$GITHUB_ENV"
-          echo "CXX_aarch64_linux_android=$android_clangxx" >> "$GITHUB_ENV"
-          echo "AR_aarch64_linux_android=$llvm_ar" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$android_clang" >> "$GITHUB_ENV"
-          echo "$toolchain_bin" >> "$GITHUB_PATH"
+          ndk-version: r29
+          add-to-path: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: ${{ env.TARGET }}
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -95,16 +54,21 @@ jobs:
 
       - name: Build Android backend binary
         working-directory: duckd
-        run: cargo build --locked --release --target aarch64-linux-android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          CC_aarch64_linux_android: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ env.TARGET }}${{ env.ANDROID_API_LEVEL }}-clang
+          CXX_aarch64_linux_android: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ env.TARGET }}${{ env.ANDROID_API_LEVEL }}-clang++
+          AR_aarch64_linux_android: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+        run: CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_aarch64_linux_android cargo build --locked --release --target ${{ env.TARGET }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 10
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
@@ -144,7 +108,7 @@ jobs:
             cp update.json "$stage"/
           fi
           cp bin/duckctl.sh "$stage/bin/duckctl.sh"
-          cp duckd/target/aarch64-linux-android/release/duckd "$stage/bin/duckd"
+          cp duckd/target/${{ env.TARGET }}/release/duckd "$stage/bin/duckd"
           cp -R webroot/. "$stage/webroot/"
 
           chmod 755 "$stage/bin/duckctl.sh" "$stage/bin/duckd"
@@ -158,7 +122,7 @@ jobs:
           echo "MODULE_ARCHIVE=$archive" >> "$GITHUB_ENV"
 
       - name: Upload module artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: duck-toolbox-module-zip
           path: ${{ env.MODULE_ARCHIVE }}
@@ -175,7 +139,7 @@ jobs:
 
     steps:
       - name: Download module artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: duck-toolbox-module-zip
           path: telegram-artifact
