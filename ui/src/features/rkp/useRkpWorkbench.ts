@@ -64,6 +64,7 @@ function unexpectedErrorText(error: unknown) {
 
 function toUiProfile(source: ProfileData): UiProfile {
   const shared = {
+    curve: source.curve,
     device: {
       ...source.device,
       vbmeta_digest: source.device.vbmeta_digest ?? "",
@@ -126,6 +127,7 @@ function toProfileData(source: UiProfile): ProfileData {
               seed_hex: seedHex,
             }
           : { kind: "unset" },
+    curve: normalized.curve,
     device: {
       ...normalized.device,
       vbmeta_digest: vbmetaDigest ? vbmetaDigest : "",

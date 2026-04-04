@@ -25,6 +25,16 @@ const { t } = useI18n()
     <div v-if="state.provisionResult" class="space-y-4">
       <div class="kv-grid">
         <div class="kv-item">
+          <span class="summary-label">{{ t("info.curve") }}</span>
+          <strong>
+            {{
+              state.provisionResult.curve === "p256"
+                ? t("choices.curveP256Label")
+                : t("choices.curveEd25519Label")
+            }}
+          </strong>
+        </div>
+        <div class="kv-item">
           <span class="summary-label">{{ t("provision.challenge") }}</span>
           <p class="mono-inline break-all">{{ state.provisionResult.challenge_hex }}</p>
         </div>
@@ -53,8 +63,33 @@ const { t } = useI18n()
         </div>
       </div>
 
+      <div
+        v-if="
+          state.provisionResult.local_test_mode ||
+          state.provisionResult.fetch_eek_error ||
+          state.provisionResult.server_submission_error
+        "
+        class="kv-grid"
+      >
+        <div v-if="state.provisionResult.local_test_mode" class="kv-item">
+          <span class="summary-label">{{ t('provision.runMode') }}</span>
+          <strong>{{ t("provision.localTestMode") }}</strong>
+        </div>
+        <div v-if="state.provisionResult.fetch_eek_error" class="kv-item">
+          <span class="summary-label">{{ t("provision.fetchEekError") }}</span>
+          <p class="mono-inline break-all">{{ state.provisionResult.fetch_eek_error }}</p>
+        </div>
+        <div v-if="state.provisionResult.server_submission_error" class="kv-item">
+          <span class="summary-label">{{ t("provision.submitError") }}</span>
+          <p class="mono-inline break-all">{{ state.provisionResult.server_submission_error }}</p>
+        </div>
+      </div>
+
       <div class="space-y-3">
         <h3 class="subheading">{{ t("status.certificateChains") }}</h3>
+        <p v-if="!state.provisionResult.cert_chains.length" class="empty-copy">
+          {{ t("provision.noCertificateChains") }}
+        </p>
         <article
           v-for="chain in state.provisionResult.cert_chains"
           :key="chain.path"

@@ -1,10 +1,8 @@
 use std::{
     ffi::CString,
     os::raw::{c_char, c_int, c_void},
-    ptr,
     process::Command,
-    slice,
-    thread,
+    ptr, slice, thread,
     time::Duration,
 };
 
@@ -24,6 +22,7 @@ const KM_TAG_ATTESTATION_ID_DEVICE: u32 = 0x9000_02C7;
 const KM_TAG_ATTESTATION_ID_PRODUCT: u32 = 0x9000_02C8;
 const KM_TAG_ATTESTATION_ID_SERIAL: u32 = 0x9000_02C9;
 const KM_TAG_ATTESTATION_ID_IMEI: u32 = 0x9000_02CA;
+const KM_TAG_ATTESTATION_ID_SECOND_IMEI: u32 = 0x9000_02CE;
 const KM_TAG_ATTESTATION_ID_MEID: u32 = 0x9000_02CB;
 const KM_TAG_ATTESTATION_ID_MANUFACTURER: u32 = 0x9000_02CC;
 const KM_TAG_ATTESTATION_ID_MODEL: u32 = 0x9000_02CD;
@@ -104,6 +103,8 @@ struct DeviceIdsReport {
 struct DeviceIdSpec {
     tag: u32,
     label: &'static str,
+    field: &'static str,
+    required: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -132,59 +133,72 @@ struct QseeComHandle {
     ion_sbuffer: *mut u8,
 }
 
-type StartApp = unsafe extern "C" fn(
-    *mut *mut QseeComHandle,
-    *const c_char,
-    *const c_char,
-    u32,
-) -> c_int;
+type StartApp =
+    unsafe extern "C" fn(*mut *mut QseeComHandle, *const c_char, *const c_char, u32) -> c_int;
 type SendCmd =
     unsafe extern "C" fn(*mut QseeComHandle, *mut c_void, u32, *mut c_void, u32) -> c_int;
 type ShutdownApp = unsafe extern "C" fn(*mut *mut QseeComHandle) -> c_int;
 
-const REQUIRED_IDS: [DeviceIdSpec; 6] = [
+const DEVICE_ID_SPECS: [DeviceIdSpec; 10] = [
     DeviceIdSpec {
         tag: KM_TAG_ATTESTATION_ID_BRAND,
         label: "BRAND",
+        field: "brand",
+        required: true,
     },
     DeviceIdSpec {
         tag: KM_TAG_ATTESTATION_ID_DEVICE,
         label: "DEVICE",
+        field: "device",
+        required: true,
     },
     DeviceIdSpec {
         tag: KM_TAG_ATTESTATION_ID_PRODUCT,
         label: "PRODUCT",
+        field: "product",
+        required: true,
     },
     DeviceIdSpec {
         tag: KM_TAG_ATTESTATION_ID_SERIAL,
         label: "SERIAL",
+        field: "serial",
+        required: true,
     },
-    DeviceIdSpec {
-        tag: KM_TAG_ATTESTATION_ID_MANUFACTURER,
-        label: "MANUFACTURER",
-    },
-    DeviceIdSpec {
-        tag: KM_TAG_ATTESTATION_ID_MODEL,
-        label: "MODEL",
-    },
-];
-
-const OPTIONAL_IDS: [DeviceIdSpec; 4] = [
     DeviceIdSpec {
         tag: KM_TAG_ATTESTATION_ID_IMEI,
         label: "IMEI",
+        field: "imei",
+        required: false,
     },
     DeviceIdSpec {
-        tag: KM_TAG_ATTESTATION_ID_IMEI,
+        tag: KM_TAG_ATTESTATION_ID_SECOND_IMEI,
         label: "IMEI2",
+        field: "imei2",
+        required: false,
     },
     DeviceIdSpec {
         tag: KM_TAG_ATTESTATION_ID_MEID,
         label: "MEID",
+        field: "meid",
+        required: false,
     },
     DeviceIdSpec {
         tag: KM_TAG_ATTESTATION_ID_MEID,
         label: "MEID2",
+        field: "meid2",
+        required: false,
+    },
+    DeviceIdSpec {
+        tag: KM_TAG_ATTESTATION_ID_MANUFACTURER,
+        label: "MANUFACTURER",
+        field: "manufacturer",
+        required: true,
+    },
+    DeviceIdSpec {
+        tag: KM_TAG_ATTESTATION_ID_MODEL,
+        label: "MODEL",
+        field: "model",
+        required: true,
     },
 ];
 
@@ -194,10 +208,8 @@ pub fn detect_defaults() -> DeviceIdsProfile {
     profile.device = first_prop(&["ro.product.device", "ro.product.vendor.device"]);
     profile.product = first_prop(&["ro.product.name", "ro.product.vendor.name"]);
     profile.serial = first_prop(&["ro.serialno", "ro.boot.serialno"]);
-    profile.manufacturer = first_prop(&[
-        "ro.product.manufacturer",
-        "ro.product.vendor.manufacturer",
-    ]);
+    profile.manufacturer =
+        first_prop(&["ro.product.manufacturer", "ro.product.vendor.manufacturer"]);
     profile.model = first_prop(&["ro.product.model", "ro.product.vendor.model"]);
     profile.imei = first_prop(&[
         "persist.vendor.radio.imei",
@@ -256,7 +268,10 @@ pub fn provision(paths: &AppPaths, profile: DeviceIdsProfile) -> Result<DeviceId
 
         let response = session.provision_device_ids(&command)?;
         if response.status != 0 {
-            bail!("PROVISION_DEVICE_IDS failed with status {}", response.status);
+            bail!(
+                "PROVISION_DEVICE_IDS failed with status {}",
+                response.status
+            );
         }
         if !response.data.is_empty() {
             response_hex = Some(hex::encode(&response.data));
@@ -352,46 +367,13 @@ fn fill_if_blank(target: &mut String, fallback: &str) {
 fn collect_ids(profile: &DeviceIdsProfile) -> Result<Vec<SelectedId>> {
     let mut ids = Vec::new();
 
-    for spec in REQUIRED_IDS {
-        let value = match spec.label {
-            "BRAND" => &profile.brand,
-            "DEVICE" => &profile.device,
-            "PRODUCT" => &profile.product,
-            "SERIAL" => &profile.serial,
-            "MANUFACTURER" => &profile.manufacturer,
-            "MODEL" => &profile.model,
-            _ => "",
-        };
-
+    for spec in DEVICE_ID_SPECS {
+        let value = profile_field_value(profile, spec.field);
         let trimmed = value.trim();
         if trimmed.is_empty() {
-            let field = match spec.label {
-                "BRAND" => "brand",
-                "DEVICE" => "device",
-                "PRODUCT" => "product",
-                "SERIAL" => "serial",
-                "MANUFACTURER" => "manufacturer",
-                "MODEL" => "model",
-                _ => "device_id",
-            };
-            return Err(AppError::MissingDeviceField(field).into());
-        }
-
-        ids.push(SelectedId {
-            tag: spec.tag,
-            label: spec.label,
-            value: trimmed.to_owned(),
-        });
-    }
-
-    for (spec, value) in OPTIONAL_IDS.into_iter().zip([
-        profile.imei.as_str(),
-        profile.imei2.as_str(),
-        profile.meid.as_str(),
-        profile.meid2.as_str(),
-    ]) {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
+            if spec.required {
+                return Err(AppError::MissingDeviceField(spec.field).into());
+            }
             continue;
         }
 
@@ -403,6 +385,22 @@ fn collect_ids(profile: &DeviceIdsProfile) -> Result<Vec<SelectedId>> {
     }
 
     Ok(ids)
+}
+
+fn profile_field_value<'a>(profile: &'a DeviceIdsProfile, field: &str) -> &'a str {
+    match field {
+        "brand" => &profile.brand,
+        "device" => &profile.device,
+        "product" => &profile.product,
+        "serial" => &profile.serial,
+        "imei" => &profile.imei,
+        "imei2" => &profile.imei2,
+        "meid" => &profile.meid,
+        "meid2" => &profile.meid2,
+        "manufacturer" => &profile.manufacturer,
+        "model" => &profile.model,
+        _ => "",
+    }
 }
 
 fn build_command(ids: &[SelectedId]) -> Result<Vec<u8>> {
@@ -485,7 +483,9 @@ fn encode_bstr(buf: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
         buf.push(0x59);
         buf.extend_from_slice(&(len as u16).to_be_bytes());
     } else {
-        return Err(anyhow!("device ID value is too large for Keymaster CBOR payload"));
+        return Err(anyhow!(
+            "device ID value is too large for Keymaster CBOR payload"
+        ));
     }
     buf.extend_from_slice(bytes);
     Ok(())
@@ -532,10 +532,7 @@ fn get_prop(name: &str) -> String {
     direct_value
 }
 
-fn command_stdout<'a>(
-    program: &str,
-    args: impl IntoIterator<Item = &'a str>,
-) -> Option<String> {
+fn command_stdout<'a>(program: &str, args: impl IntoIterator<Item = &'a str>) -> Option<String> {
     let output = Command::new(program).args(args).output().ok()?;
     if !output.status.success() {
         return None;
@@ -761,7 +758,10 @@ fn read_i32(bytes: &[u8], offset: usize) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceIdsProfile, build_command, collect_ids, detect_defaults};
+    use super::{
+        DeviceIdsProfile, KM_TAG_ATTESTATION_ID_SECOND_IMEI, build_command, collect_ids,
+        detect_defaults,
+    };
 
     #[test]
     fn collect_ids_requires_base_fields() {
@@ -785,6 +785,61 @@ mod tests {
         let command = build_command(&ids).unwrap();
 
         assert_eq!(&command[..4], &0x220Au32.to_ne_bytes());
+    }
+
+    #[test]
+    fn collect_ids_uses_second_imei_tag() {
+        let profile = DeviceIdsProfile {
+            brand: "google".into(),
+            device: "husky".into(),
+            product: "husky".into(),
+            serial: "ABC123".into(),
+            manufacturer: "Google".into(),
+            model: "Pixel".into(),
+            imei2: "123456789012345".into(),
+            ..DeviceIdsProfile::default()
+        };
+
+        let ids = collect_ids(&profile).unwrap();
+        let imei2 = ids.iter().find(|entry| entry.label == "IMEI2").unwrap();
+
+        assert_eq!(imei2.tag, KM_TAG_ATTESTATION_ID_SECOND_IMEI);
+    }
+
+    #[test]
+    fn collect_ids_matches_reference_order() {
+        let profile = DeviceIdsProfile {
+            brand: "google".into(),
+            device: "husky".into(),
+            product: "husky".into(),
+            serial: "ABC123".into(),
+            imei: "111111111111111".into(),
+            imei2: "222222222222222".into(),
+            meid: "A0000000002321".into(),
+            meid2: "A0000000002322".into(),
+            manufacturer: "Google".into(),
+            model: "Pixel".into(),
+            ..DeviceIdsProfile::default()
+        };
+
+        let ids = collect_ids(&profile).unwrap();
+        let labels: Vec<_> = ids.iter().map(|entry| entry.label).collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                "BRAND",
+                "DEVICE",
+                "PRODUCT",
+                "SERIAL",
+                "IMEI",
+                "IMEI2",
+                "MEID",
+                "MEID2",
+                "MANUFACTURER",
+                "MODEL",
+            ]
+        );
     }
 
     #[test]

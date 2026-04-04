@@ -111,6 +111,9 @@ export default {
     dialogKeySourceTitle: "Choose Key Material",
     dialogKeySourceDescription:
       "Pick how Duck ToolBox should resolve the CDI_Leaf seed for this tool run.",
+    dialogCurveTitle: "Choose DICE Curve",
+    dialogCurveDescription:
+      "Select which signing curve the generated DICE chain should use.",
     dialogSecurityTitle: "Choose Hardware Security",
     dialogSecurityDescription:
       "Use the level that matches the KeyMint instance you want to emulate or export from.",
@@ -125,6 +128,7 @@ export default {
       "Select how many attestation keys Duck ToolBox should ask the RKP server to sign.",
     notDetected: "Not detected",
     keySource: "Key Material",
+    curve: "DICE Curve",
     seedMode: "Direct Seed",
     hwKeyMode: "Hardware Key + KDF",
     seed: "Seed Value (CDI_Leaf)",
@@ -157,14 +161,21 @@ export default {
   info: {
     empty:
       "Reads the current settings and shows the seed, public key, and device summary.",
+    curve: "Curve",
     seed: "Seed",
-    ed25519: "Ed25519 PubKey",
+    publicKey: "Public Key",
   },
   provision: {
     empty:
       "Creates the request from the current settings and saves the CSR and certificate files to var/outputs/rkp-provision-*.",
     challenge: "Challenge",
     csr: "CSR",
+    runMode: "Provision Mode",
+    localTestMode: "Local Test Mode",
+    fetchEekError: "Fetch EEK Error",
+    submitError: "Server Submission Error",
+    noCertificateChains:
+      "No certificate chains were returned. The CSR was still generated and saved locally.",
   },
   keybox: {
     empty:
@@ -181,8 +192,6 @@ export default {
     replacePromptSkipLabel: "Keep generated file only",
     replacePromptSkipDescription:
       "Leave TrickyStore untouched for now and only keep the generated keybox in the Duck ToolBox data directory.",
-    comment: "Embedded Comment",
-    commentValue: "Made by Eltavine & MhmRdd",
     keyboxPath: "Keybox Path",
     deviceId: "Device ID",
     csrPath: "CSR Path",
@@ -318,6 +327,12 @@ export default {
     bootLockedDescription: "The bootloader stays locked.",
     bootUnlockedLabel: "Unlocked",
     bootUnlockedDescription: "The bootloader is unlocked.",
+    curveEd25519Label: "Ed25519",
+    curveEd25519Description:
+      "Use the default Android software-style Ed25519 DICE signing key.",
+    curveP256Label: "P-256",
+    curveP256Description:
+      "Use a secp256r1 DICE signing key to match the alternative reference flow.",
     numKeysOneLabel: "1 key",
     numKeysOneDescription: "Request one attestation key.",
     numKeysTwoLabel: "2 keys",

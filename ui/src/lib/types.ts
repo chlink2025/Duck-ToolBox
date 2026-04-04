@@ -3,6 +3,8 @@ export type KeySource =
   | { kind: "seed"; seed_hex: string }
   | { kind: "hw-key"; hw_key_hex: string; kdf_label: string }
 
+export type DiceCurve = "ed25519" | "p256"
+
 export interface DeviceInfo {
   brand: string
   model: string
@@ -28,6 +30,7 @@ export interface FingerprintConfig {
 
 export interface ProfileData {
   key_source: KeySource
+  curve: DiceCurve
   device: DeviceInfo
   fingerprint: FingerprintConfig
   server_url: string
@@ -70,8 +73,10 @@ export interface ProfileEnvelopeData {
 
 export interface InfoData {
   mode: string
+  curve: DiceCurve
   seed_hex: string
-  ed25519_pubkey_hex: string
+  public_key_hex: string
+  ed25519_pubkey_hex?: string
   device: DeviceInfo
   fingerprint: string
   server_url: string
@@ -101,6 +106,7 @@ export interface VerifyReport {
 
 export interface ProvisionData {
   mode: string
+  curve: DiceCurve
   cdi_leaf_pubkey_hex: string
   challenge_hex: string
   csr_path: string
@@ -108,6 +114,9 @@ export interface ProvisionData {
   protected_data_len: number
   local_verify: VerifyReport
   cert_chains: ProvisionChain[]
+  local_test_mode: boolean
+  fetch_eek_error?: string | null
+  server_submission_error?: string | null
 }
 
 export interface KeyboxData {
@@ -201,26 +210,27 @@ export interface CommandHistoryEntry {
 export function defaultProfile(): ProfileData {
   return {
     key_source: { kind: "unset" },
+    curve: "ed25519",
     device: {
-      brand: "",
-      model: "",
-      device: "",
-      product: "",
-      manufacturer: "",
-      fused: 0,
-      vb_state: "",
-      os_version: "",
-      security_level: "",
-      bootloader_state: "",
-      boot_patch_level: 0,
-      system_patch_level: 0,
-      vendor_patch_level: 0,
+      brand: "generic",
+      model: "default",
+      device: "default",
+      product: "default",
+      manufacturer: "generic",
+      fused: 1,
+      vb_state: "green",
+      os_version: "13",
+      security_level: "tee",
+      bootloader_state: "locked",
+      boot_patch_level: 20250101,
+      system_patch_level: 202501,
+      vendor_patch_level: 20250101,
       vbmeta_digest: "",
-      dice_issuer: "",
-      dice_subject: "",
+      dice_issuer: "Android",
+      dice_subject: "KeyMint",
     },
     fingerprint: {
-      value: "",
+      value: "generic/default/default:13/TP1A.220624.014/0:user/release-keys",
     },
     server_url: "https://remoteprovisioning.googleapis.com/v1",
     num_keys: 1,

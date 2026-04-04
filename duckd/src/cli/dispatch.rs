@@ -10,6 +10,7 @@ use reqwest::Client;
 use rustls::{ClientConfig, RootCertStore};
 use serde::Serialize;
 use serde_json::{Value, json};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
 use super::args::{
     ArtifactCommands, Commands, DeviceIdsCommands, DeviceIdsProvisionArgs, KeyboxArgs,
@@ -18,9 +19,12 @@ use super::args::{
 use super::keybox_output::{KeyboxData, resolve_keybox_output_path};
 use duckd::{
     features::{
-        device_ids::{DeviceIdsProfile, detect_defaults as detect_device_ids_defaults, provision as provision_device_ids},
+        device_ids::{
+            DeviceIdsProfile, detect_defaults as detect_device_ids_defaults,
+            provision as provision_device_ids,
+        },
         rkp::{
-            cose_dice::{DeviceKeys, build_csr, generate_ec_keypair},
+            cose_dice::{DeviceKeys, RPC_CURVE_25519, build_csr, generate_ec_keypair},
             crypto_kdf::resolve_seed,
             http::{fetch_eek, submit_csr},
             keybox_xml::{
@@ -51,7 +55,9 @@ const HTTP_REQUEST_TIMEOUT_SECS: u64 = 20;
 #[derive(Debug, Serialize)]
 struct InfoData {
     mode: String,
+    curve: String,
     seed_hex: String,
+    public_key_hex: String,
     ed25519_pubkey_hex: String,
     device: duckd::runtime::profile::DeviceInfo,
     fingerprint: String,
@@ -86,6 +92,7 @@ struct ProvisionChain {
 #[derive(Debug, Serialize)]
 struct ProvisionData {
     mode: String,
+    curve: String,
     cdi_leaf_pubkey_hex: String,
     challenge_hex: String,
     csr_path: String,
@@ -93,6 +100,9 @@ struct ProvisionData {
     protected_data_len: usize,
     local_verify: VerifyReport,
     cert_chains: Vec<ProvisionChain>,
+    local_test_mode: bool,
+    fetch_eek_error: Option<String>,
+    server_submission_error: Option<String>,
 }
 
 pub async fn dispatch(command: Commands, paths: &AppPaths) -> CommandResult {
@@ -256,12 +266,15 @@ fn handle_artifacts(paths: &AppPaths) -> Result<ArtifactsData> {
 fn handle_info(paths: &AppPaths, args: &SharedRunArgs) -> Result<InfoData> {
     let resolved = resolve_runtime(paths, args, None, None)?;
     let seed = resolve_seed(&resolved.profile.key_source)?;
-    let keys = DeviceKeys::from_seed(seed);
+    let keys = DeviceKeys::from_seed_with_curve(seed, resolved.profile.curve);
+    let public_key_hex = keys.public_key_hex();
 
     Ok(InfoData {
         mode: resolved.profile.key_source.mode_label().into(),
+        curve: resolved.profile.curve.as_str().into(),
         seed_hex: keys.seed_hex(),
-        ed25519_pubkey_hex: keys.public_key_hex(),
+        public_key_hex: public_key_hex.clone(),
+        ed25519_pubkey_hex: public_key_hex,
         device: resolved.profile.device.clone(),
         fingerprint: resolved.profile.fingerprint.value.clone(),
         server_url: resolved.profile.server_url.clone(),
@@ -279,7 +292,7 @@ async fn handle_provision(
     let server_url =
         ensure_rkp_request_context(&resolved.profile).map_err(|error| (error, None))?;
     let seed = resolve_seed(&resolved.profile.key_source).map_err(|error| (error, None))?;
-    let keys = DeviceKeys::from_seed(seed);
+    let keys = DeviceKeys::from_seed_with_curve(seed, resolved.profile.curve);
     let client = build_http_client().map_err(|error| (error, None))?;
 
     let mut cose_pubs = Vec::new();
@@ -288,18 +301,45 @@ async fn handle_provision(
         cose_pubs.push(pair.cose_public);
     }
 
-    let eek = fetch_eek(&client, &resolved.profile.fingerprint.value, &server_url)
-        .await
-        .map_err(|error| (error, None))?;
+    let (local_test_mode, fetch_eek_error, challenge, challenge_hex, eek_public, eek_id, eek_curve) =
+        match fetch_eek(&client, &resolved.profile.fingerprint.value, &server_url).await {
+            Ok(eek) => (
+                false,
+                None,
+                eek.challenge,
+                eek.challenge_hex,
+                eek.eek_public,
+                eek.eek_id,
+                eek.eek_curve,
+            ),
+            Err(error) => {
+                let challenge =
+                    random_bytes_vec(32).map_err(|random_error| (random_error, None))?;
+                let eek_secret_bytes =
+                    random_bytes_array::<32>().map_err(|random_error| (random_error, None))?;
+                let eek_secret = X25519StaticSecret::from(eek_secret_bytes);
+                let public_key = X25519PublicKey::from(&eek_secret);
+
+                (
+                    true,
+                    Some(error.to_string()),
+                    challenge.clone(),
+                    hex::encode(&challenge),
+                    public_key.as_bytes().to_vec(),
+                    Vec::new(),
+                    RPC_CURVE_25519,
+                )
+            }
+        };
 
     let csr = build_csr(
         &keys,
-        &eek.challenge,
+        &challenge,
         &cose_pubs,
-        &eek.eek_public,
-        &eek.eek_id,
+        &eek_public,
+        &eek_id,
         &resolved.profile.device,
-        eek.eek_curve,
+        eek_curve,
     )
     .map_err(|error| (error, None))?;
 
@@ -322,16 +362,14 @@ async fn handle_provision(
         )
     })?;
 
-    let cert_chains = submit_csr(&client, &csr.csr_bytes, &eek.challenge, &server_url)
-        .await
-        .map_err(|error| {
-            (
-                error,
-                Some(json!({
-                    "csr_path": csr_path.display().to_string(),
-                })),
-            )
-        })?;
+    let mut server_submission_error = None;
+    let cert_chains = match submit_csr(&client, &csr.csr_bytes, &challenge, &server_url).await {
+        Ok(chains) => chains,
+        Err(error) => {
+            server_submission_error = Some(error.to_string());
+            Vec::new()
+        }
+    };
 
     let mut chain_data = Vec::new();
     for (index, chain) in cert_chains.iter().enumerate() {
@@ -347,13 +385,17 @@ async fn handle_provision(
 
     Ok(ProvisionData {
         mode: resolved.profile.key_source.mode_label().into(),
+        curve: resolved.profile.curve.as_str().into(),
         cdi_leaf_pubkey_hex: keys.public_key_hex(),
-        challenge_hex: eek.challenge_hex,
+        challenge_hex,
         csr_path: csr_path.display().to_string(),
         csr_len: csr.csr_bytes.len(),
         protected_data_len: csr.protected_data_len,
         local_verify,
         cert_chains: chain_data,
+        local_test_mode,
+        fetch_eek_error,
+        server_submission_error,
     })
 }
 
@@ -366,7 +408,7 @@ async fn handle_keybox(
     let server_url =
         ensure_rkp_request_context(&resolved.profile).map_err(|error| (error, None))?;
     let seed = resolve_seed(&resolved.profile.key_source).map_err(|error| (error, None))?;
-    let keys = DeviceKeys::from_seed(seed);
+    let keys = DeviceKeys::from_seed_with_curve(seed, resolved.profile.curve);
     let client = build_http_client().map_err(|error| (error, None))?;
     let ec_key = generate_ec_keypair().map_err(|error| (error, None))?;
 
@@ -477,6 +519,7 @@ fn resolve_runtime(
             seed_hex: shared.seed.clone(),
             hw_key_hex: shared.hw_key.clone(),
             kdf_label: shared.kdf_label.clone(),
+            curve: shared.curve,
             server_url: shared.server_url.clone(),
             num_keys,
             output_path,
@@ -545,6 +588,18 @@ fn unique_output_dir(paths: &AppPaths, prefix: &str) -> Result<PathBuf> {
     create_unique_dir(&paths.outputs_dir, prefix)
 }
 
+fn random_bytes_array<const N: usize>() -> Result<[u8; N]> {
+    let mut bytes = [0_u8; N];
+    getrandom::fill(&mut bytes).map_err(|error| anyhow!("fill random bytes: {error}"))?;
+    Ok(bytes)
+}
+
+fn random_bytes_vec(len: usize) -> Result<Vec<u8>> {
+    let mut bytes = vec![0_u8; len];
+    getrandom::fill(&mut bytes).map_err(|error| anyhow!("fill random bytes: {error}"))?;
+    Ok(bytes)
+}
+
 fn validate_device_info_for_request(device: &duckd::runtime::profile::DeviceInfo) -> Result<()> {
     for (field, value) in [
         ("brand", device.brand.as_str()),
@@ -586,20 +641,18 @@ fn validate_device_info_for_request(device: &duckd::runtime::profile::DeviceInfo
     validate_patch_level("system_patch_level", device.system_patch_level, 6)?;
     validate_patch_level("vendor_patch_level", device.vendor_patch_level, 8)?;
 
-    let vbmeta_digest = device
-        .vbmeta_digest
-        .as_deref()
-        .ok_or(AppError::MissingDeviceField("vbmeta_digest"))?;
-    let decoded = hex::decode(vbmeta_digest).map_err(|_| AppError::InvalidDeviceField {
-        field: "vbmeta_digest",
-        reason: "expected 32-byte hexadecimal data".into(),
-    })?;
-    if decoded.len() != 32 {
-        return Err(AppError::InvalidDeviceField {
+    if let Some(vbmeta_digest) = device.vbmeta_digest.as_deref() {
+        let decoded = hex::decode(vbmeta_digest).map_err(|_| AppError::InvalidDeviceField {
             field: "vbmeta_digest",
             reason: "expected 32-byte hexadecimal data".into(),
+        })?;
+        if decoded.len() != 32 {
+            return Err(AppError::InvalidDeviceField {
+                field: "vbmeta_digest",
+                reason: "expected 32-byte hexadecimal data".into(),
+            }
+            .into());
         }
-        .into());
     }
 
     Ok(())
@@ -735,12 +788,11 @@ mod tls_tests {
     }
 
     #[test]
-    fn validate_device_info_requires_vbmeta_digest() {
+    fn validate_device_info_allows_missing_vbmeta_digest() {
         let mut device = valid_device_info();
         device.vbmeta_digest = None;
 
-        let error = validate_device_info_for_request(&device).unwrap_err();
-        assert!(error.to_string().contains("vbmeta_digest"));
+        validate_device_info_for_request(&device).unwrap();
     }
 
     #[test]

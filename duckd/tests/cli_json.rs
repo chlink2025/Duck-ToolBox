@@ -7,7 +7,7 @@ use std::{
 
 use duckd::{
     features::rkp::cose_dice::{DeviceKeys, build_csr, generate_ec_keypair},
-    runtime::profile::{DeviceInfo, FingerprintConfig, KeySource, ProfileData},
+    runtime::profile::{DeviceInfo, DiceCurve, FingerprintConfig, KeySource, ProfileData},
 };
 
 fn temp_root() -> PathBuf {
@@ -74,6 +74,8 @@ fn profile_show_returns_default_profile_json() {
     let payload = run(&root, &["rkp", "profile", "show", "--json"]);
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "rkp.profile.show");
+    assert_eq!(payload["data"]["profile"]["curve"], "ed25519");
+    assert_eq!(payload["data"]["profile"]["device"]["brand"], "generic");
     assert_eq!(payload["data"]["profile"]["num_keys"], 1);
 }
 
@@ -84,6 +86,7 @@ fn profile_save_then_info_round_trip() {
         key_source: KeySource::Seed {
             seed_hex: "11".repeat(32),
         },
+        curve: DiceCurve::P256,
         device: DeviceInfo::default(),
         fingerprint: FingerprintConfig {
             value: "duck/device/model:13/ABC/1:user/release-keys".into(),
@@ -114,9 +117,11 @@ fn profile_save_then_info_round_trip() {
         info["data"]["fingerprint"],
         "duck/device/model:13/ABC/1:user/release-keys"
     );
+    assert_eq!(info["data"]["curve"], "p256");
     assert_eq!(info["data"]["num_keys"], 2);
     assert_eq!(info["data"]["mode"], "direct-seed");
     assert_eq!(info["command"], "rkp.info");
+    assert_eq!(info["data"]["public_key_hex"].as_str().unwrap().len(), 128);
 }
 
 #[test]
@@ -149,13 +154,16 @@ fn verify_command_emits_json_contract() {
 }
 
 #[test]
-fn keybox_preflight_rejects_incomplete_device_profile() {
+fn keybox_preflight_rejects_blank_required_device_profile() {
     let root = temp_root();
+    let mut device = DeviceInfo::default();
+    device.brand.clear();
     let profile = ProfileData {
         key_source: KeySource::Seed {
             seed_hex: "11".repeat(32),
         },
-        device: DeviceInfo::default(),
+        curve: DiceCurve::Ed25519,
+        device,
         fingerprint: FingerprintConfig {
             value: "duck/device/model:13/ABC/1:user/release-keys".into(),
         },

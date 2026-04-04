@@ -110,6 +110,9 @@ export default {
     dialogKeySourceTitle: "选择密钥材料",
     dialogKeySourceDescription:
       "选择 Duck ToolBox 本次运行要怎样得到 CDI_Leaf seed。",
+    dialogCurveTitle: "选择 DICE 曲线",
+    dialogCurveDescription:
+      "决定生成的 DICE 链应该使用哪种签名曲线。",
     dialogSecurityTitle: "选择硬件安全级别",
     dialogSecurityDescription:
       "这里应当和你要模拟或导出的 KeyMint 实例一致。",
@@ -124,6 +127,7 @@ export default {
       "选择 Duck ToolBox 本次向 RKP 服务申请签发多少把证明密钥。",
     notDetected: "未识别",
     keySource: "密钥材料",
+    curve: "DICE 曲线",
     seedMode: "直接 Seed",
     hwKeyMode: "硬件密钥 + KDF",
     seed: "Seed 值（CDI_Leaf）",
@@ -155,13 +159,19 @@ export default {
   },
   info: {
     empty: "这里会读取当前配置，并显示 seed、公钥和设备摘要。",
+    curve: "曲线",
     seed: "Seed",
-    ed25519: "Ed25519 公钥",
+    publicKey: "公钥",
   },
   provision: {
     empty: "这里会根据当前配置生成请求，并把 CSR 和证书文件保存到 var/outputs/rkp-provision-*。",
     challenge: "Challenge",
     csr: "CSR",
+    runMode: "运行模式",
+    localTestMode: "本地测试模式",
+    fetchEekError: "获取 EEK 失败",
+    submitError: "提交到服务器失败",
+    noCertificateChains: "没有返回证书链，但 CSR 已经在本地生成并保存。",
   },
   keybox: {
     empty: "这里会根据当前配置申请证书，生成可预览的 XML，并默认保存到 var/outputs 下带时间戳的文件。",
@@ -176,8 +186,6 @@ export default {
     replacePromptSkipLabel: "先只保留生成结果",
     replacePromptSkipDescription:
       "暂时不修改 TrickyStore，只把新生成的 keybox 保留在 Duck ToolBox 数据目录中。",
-    comment: "内置注释",
-    commentValue: "Made by Eltavine & MhmRdd",
     keyboxPath: "Keybox 路径",
     deviceId: "设备 ID",
     csrPath: "CSR 路径",
@@ -304,6 +312,10 @@ export default {
     bootLockedDescription: "Bootloader 保持锁定。",
     bootUnlockedLabel: "已解锁",
     bootUnlockedDescription: "Bootloader 处于解锁状态。",
+    curveEd25519Label: "Ed25519",
+    curveEd25519Description: "使用默认的软件侧 Ed25519 DICE 签名密钥。",
+    curveP256Label: "P-256",
+    curveP256Description: "使用 secp256r1 DICE 签名密钥，对齐另一条参考实现。",
     numKeysOneLabel: "1 把密钥",
     numKeysOneDescription: "申请 1 把证明密钥。",
     numKeysTwoLabel: "2 把密钥",

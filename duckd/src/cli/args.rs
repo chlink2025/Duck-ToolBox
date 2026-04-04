@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand};
+use duckd::runtime::profile::DiceCurve;
 
 #[derive(Parser)]
 #[command(name = "duckd")]
@@ -104,6 +105,8 @@ pub struct SharedRunArgs {
     pub hw_key: Option<String>,
     #[arg(long)]
     pub kdf_label: Option<String>,
+    #[arg(long, value_enum)]
+    pub curve: Option<DiceCurve>,
     #[arg(long)]
     pub server_url: Option<String>,
     #[arg(long)]

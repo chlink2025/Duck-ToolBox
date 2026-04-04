@@ -1,15 +1,21 @@
 <script setup lang="ts">
+import { computed } from "vue"
 import { LoaderCircle, Radar } from "lucide-vue-next"
 
 import { useI18n } from "@/i18n"
 import type { RkpWorkbenchActions, RkpWorkbenchState } from "../types"
 
-defineProps<{
+const props = defineProps<{
   state: RkpWorkbenchState
   actions: RkpWorkbenchActions
 }>()
 
 const { t } = useI18n()
+const curveLabel = computed(() =>
+  props.state.infoResult?.curve === "p256"
+    ? t("choices.curveP256Label")
+    : t("choices.curveEd25519Label"),
+)
 </script>
 
 <template>
@@ -28,6 +34,10 @@ const { t } = useI18n()
         <strong>{{ state.infoResult.mode }}</strong>
       </div>
       <div class="kv-item">
+        <span class="summary-label">{{ t("info.curve") }}</span>
+        <strong>{{ curveLabel }}</strong>
+      </div>
+      <div class="kv-item">
         <span class="summary-label">{{ t("profile.fingerprint") }}</span>
         <p class="mono-inline break-all">{{ state.infoResult.fingerprint }}</p>
       </div>
@@ -36,8 +46,8 @@ const { t } = useI18n()
         <p class="mono-inline break-all">{{ state.infoResult.seed_hex }}</p>
       </div>
       <div class="kv-item">
-        <span class="summary-label">{{ t("info.ed25519") }}</span>
-        <p class="mono-inline break-all">{{ state.infoResult.ed25519_pubkey_hex }}</p>
+        <span class="summary-label">{{ t("info.publicKey") }}</span>
+        <p class="mono-inline break-all">{{ state.infoResult.public_key_hex }}</p>
       </div>
     </div>
     <p v-else class="empty-copy">

@@ -1,15 +1,18 @@
+import { defaultProfile as backendDefaultProfile } from "@/lib/types"
 import type { ProfileData } from "@/lib/types"
 
 import type { UiProfile } from "./types"
 
 export const DEFAULT_KDF_LABEL = "rkp_bcc_km"
+const genericDefaults = backendDefaultProfile()
 
-function mergeString(current: string, fallback: string) {
-  return current.trim() ? current : fallback
+function mergeString(current: string, fallback: string, generic: string) {
+  const normalized = current.trim()
+  return normalized && normalized !== generic ? normalized : fallback
 }
 
-function mergeNumber(current: number, fallback: number) {
-  return current > 0 ? current : fallback
+function mergeNumber(current: number, fallback: number, generic: number) {
+  return current > 0 && current !== generic ? current : fallback
 }
 
 function normalizeText(value: string) {
@@ -63,57 +66,105 @@ export function mergeMissingSystemProfile(
   const current = normalizeUiProfile(profile)
   return normalizeUiProfile({
     ...current,
-    fingerprint: mergeString(current.fingerprint, defaults.fingerprint.value),
-    server_url: mergeString(current.server_url, defaults.server_url),
-    num_keys: mergeNumber(current.num_keys, defaults.num_keys),
-    output_path: mergeString(current.output_path, defaults.output_path),
+    curve:
+      current.curve !== genericDefaults.curve ? current.curve : defaults.curve,
+    fingerprint: mergeString(
+      current.fingerprint,
+      defaults.fingerprint.value,
+      genericDefaults.fingerprint.value,
+    ),
+    server_url: mergeString(
+      current.server_url,
+      defaults.server_url,
+      genericDefaults.server_url,
+    ),
+    num_keys: mergeNumber(current.num_keys, defaults.num_keys, genericDefaults.num_keys),
+    output_path: mergeString(
+      current.output_path,
+      defaults.output_path,
+      genericDefaults.output_path,
+    ),
     device: {
       ...current.device,
-      brand: mergeString(current.device.brand, defaults.device.brand),
-      model: mergeString(current.device.model, defaults.device.model),
-      device: mergeString(current.device.device, defaults.device.device),
-      product: mergeString(current.device.product, defaults.device.product),
+      brand: mergeString(
+        current.device.brand,
+        defaults.device.brand,
+        genericDefaults.device.brand,
+      ),
+      model: mergeString(
+        current.device.model,
+        defaults.device.model,
+        genericDefaults.device.model,
+      ),
+      device: mergeString(
+        current.device.device,
+        defaults.device.device,
+        genericDefaults.device.device,
+      ),
+      product: mergeString(
+        current.device.product,
+        defaults.device.product,
+        genericDefaults.device.product,
+      ),
       manufacturer: mergeString(
         current.device.manufacturer,
         defaults.device.manufacturer,
+        genericDefaults.device.manufacturer,
       ),
-      vb_state: mergeString(current.device.vb_state, defaults.device.vb_state),
+      vb_state: mergeString(
+        current.device.vb_state,
+        defaults.device.vb_state,
+        genericDefaults.device.vb_state,
+      ),
       os_version: mergeString(
         current.device.os_version,
         defaults.device.os_version,
+        genericDefaults.device.os_version,
       ),
       security_level: mergeString(
         current.device.security_level,
         defaults.device.security_level,
+        genericDefaults.device.security_level,
       ),
       bootloader_state: mergeString(
         current.device.bootloader_state,
         defaults.device.bootloader_state,
+        genericDefaults.device.bootloader_state,
       ),
       vbmeta_digest: mergeString(
         current.device.vbmeta_digest,
         defaults.device.vbmeta_digest ?? "",
+        genericDefaults.device.vbmeta_digest ?? "",
       ),
       dice_issuer: mergeString(
         current.device.dice_issuer,
         defaults.device.dice_issuer,
+        genericDefaults.device.dice_issuer,
       ),
       dice_subject: mergeString(
         current.device.dice_subject,
         defaults.device.dice_subject,
+        genericDefaults.device.dice_subject,
       ),
-      fused: mergeNumber(current.device.fused, defaults.device.fused),
+      fused: mergeNumber(
+        current.device.fused,
+        defaults.device.fused,
+        genericDefaults.device.fused,
+      ),
       boot_patch_level: mergeNumber(
         current.device.boot_patch_level,
         defaults.device.boot_patch_level,
+        genericDefaults.device.boot_patch_level,
       ),
       system_patch_level: mergeNumber(
         current.device.system_patch_level,
         defaults.device.system_patch_level,
+        genericDefaults.device.system_patch_level,
       ),
       vendor_patch_level: mergeNumber(
         current.device.vendor_patch_level,
         defaults.device.vendor_patch_level,
+        genericDefaults.device.vendor_patch_level,
       ),
     },
   })

@@ -476,6 +476,7 @@ export async function systemProfileDefaults(): Promise<ProfileData | null> {
 
     return {
       key_source: { kind: "unset" },
+      curve: defaultProfile().curve,
       device,
       fingerprint: {
         value: props["ro.build.fingerprint"] ?? "",

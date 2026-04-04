@@ -12,6 +12,39 @@ use super::{errors::AppError, files::write_string_atomic, paths::AppPaths};
 
 pub const DEFAULT_SERVER_URL: &str = "https://remoteprovisioning.googleapis.com/v1";
 pub const DEFAULT_OUTPUT_PATH: &str = "var/outputs/keybox.xml";
+pub const DEFAULT_DICE_ISSUER: &str = "Android";
+pub const DEFAULT_DICE_SUBJECT: &str = "KeyMint";
+pub const DEFAULT_GENERIC_BRAND: &str = "generic";
+pub const DEFAULT_GENERIC_MODEL: &str = "default";
+pub const DEFAULT_GENERIC_DEVICE: &str = "default";
+pub const DEFAULT_GENERIC_PRODUCT: &str = "default";
+pub const DEFAULT_GENERIC_MANUFACTURER: &str = "generic";
+pub const DEFAULT_GENERIC_VB_STATE: &str = "green";
+pub const DEFAULT_GENERIC_OS_VERSION: &str = "13";
+pub const DEFAULT_GENERIC_SECURITY_LEVEL: &str = "tee";
+pub const DEFAULT_GENERIC_BOOTLOADER_STATE: &str = "locked";
+pub const DEFAULT_GENERIC_BOOT_PATCH_LEVEL: u32 = 20250101;
+pub const DEFAULT_GENERIC_SYSTEM_PATCH_LEVEL: u32 = 202501;
+pub const DEFAULT_GENERIC_VENDOR_PATCH_LEVEL: u32 = 20250101;
+pub const DEFAULT_GENERIC_FINGERPRINT: &str =
+    "generic/default/default:13/TP1A.220624.014/0:user/release-keys";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum DiceCurve {
+    #[default]
+    Ed25519,
+    P256,
+}
+
+impl DiceCurve {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiceCurve::Ed25519 => "ed25519",
+            DiceCurve::P256 => "p256",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -66,22 +99,22 @@ pub struct DeviceInfo {
 impl Default for DeviceInfo {
     fn default() -> Self {
         Self {
-            brand: String::new(),
-            model: String::new(),
-            device: String::new(),
-            product: String::new(),
-            manufacturer: String::new(),
-            fused: 0,
-            vb_state: String::new(),
-            os_version: String::new(),
-            security_level: String::new(),
-            bootloader_state: String::new(),
-            boot_patch_level: 0,
-            system_patch_level: 0,
-            vendor_patch_level: 0,
+            brand: DEFAULT_GENERIC_BRAND.into(),
+            model: DEFAULT_GENERIC_MODEL.into(),
+            device: DEFAULT_GENERIC_DEVICE.into(),
+            product: DEFAULT_GENERIC_PRODUCT.into(),
+            manufacturer: DEFAULT_GENERIC_MANUFACTURER.into(),
+            fused: 1,
+            vb_state: DEFAULT_GENERIC_VB_STATE.into(),
+            os_version: DEFAULT_GENERIC_OS_VERSION.into(),
+            security_level: DEFAULT_GENERIC_SECURITY_LEVEL.into(),
+            bootloader_state: DEFAULT_GENERIC_BOOTLOADER_STATE.into(),
+            boot_patch_level: DEFAULT_GENERIC_BOOT_PATCH_LEVEL,
+            system_patch_level: DEFAULT_GENERIC_SYSTEM_PATCH_LEVEL,
+            vendor_patch_level: DEFAULT_GENERIC_VENDOR_PATCH_LEVEL,
             vbmeta_digest: None,
-            dice_issuer: String::new(),
-            dice_subject: String::new(),
+            dice_issuer: DEFAULT_DICE_ISSUER.into(),
+            dice_subject: DEFAULT_DICE_SUBJECT.into(),
         }
     }
 }
@@ -94,7 +127,7 @@ pub struct FingerprintConfig {
 impl Default for FingerprintConfig {
     fn default() -> Self {
         Self {
-            value: String::new(),
+            value: DEFAULT_GENERIC_FINGERPRINT.into(),
         }
     }
 }
@@ -103,6 +136,8 @@ impl Default for FingerprintConfig {
 pub struct ProfileData {
     #[serde(default)]
     pub key_source: KeySource,
+    #[serde(default)]
+    pub curve: DiceCurve,
     #[serde(default)]
     pub device: DeviceInfo,
     #[serde(default)]
@@ -119,6 +154,7 @@ impl Default for ProfileData {
     fn default() -> Self {
         Self {
             key_source: KeySource::Unset,
+            curve: DiceCurve::default(),
             device: DeviceInfo::default(),
             fingerprint: FingerprintConfig::default(),
             server_url: default_server_url(),
@@ -134,6 +170,7 @@ pub struct RunOverrides {
     pub seed_hex: Option<String>,
     pub hw_key_hex: Option<String>,
     pub kdf_label: Option<String>,
+    pub curve: Option<DiceCurve>,
     pub server_url: Option<String>,
     pub num_keys: Option<u32>,
     pub output_path: Option<String>,
@@ -149,6 +186,8 @@ pub struct ResolvedProfile {
 struct PublicProfileDisk {
     #[serde(default)]
     key_source: PublicKeySourceDisk,
+    #[serde(default)]
+    curve: DiceCurve,
     #[serde(default)]
     device: DeviceInfo,
     #[serde(default)]
@@ -271,6 +310,10 @@ pub fn resolve_profile(paths: &AppPaths, overrides: &RunOverrides) -> Result<Res
         profile.server_url = server_url;
     }
 
+    if let Some(curve) = overrides.curve {
+        profile.curve = curve;
+    }
+
     if let Some(num_keys) = overrides.num_keys {
         profile.num_keys = num_keys.max(1);
     }
@@ -323,6 +366,7 @@ impl ProfileData {
 
         Self {
             key_source,
+            curve: public.curve,
             device: public.device,
             fingerprint: public.fingerprint,
             server_url: public.server_url,
@@ -348,6 +392,7 @@ impl From<&ProfileData> for PublicProfileDisk {
 
         Self {
             key_source: PublicKeySourceDisk { kind, kdf_label },
+            curve: value.curve,
             device: value.device.clone(),
             fingerprint: value.fingerprint.clone(),
             server_url: value.server_url.clone(),
@@ -428,8 +473,16 @@ fn normalize_device_info(device: &mut DeviceInfo) {
     device.os_version = device.os_version.trim().to_owned();
     device.security_level = device.security_level.trim().to_ascii_lowercase();
     device.bootloader_state = device.bootloader_state.trim().to_ascii_lowercase();
-    device.dice_issuer = device.dice_issuer.trim().to_owned();
-    device.dice_subject = device.dice_subject.trim().to_owned();
+    device.dice_issuer = if device.dice_issuer.trim().is_empty() {
+        DEFAULT_DICE_ISSUER.into()
+    } else {
+        device.dice_issuer.trim().to_owned()
+    };
+    device.dice_subject = if device.dice_subject.trim().is_empty() {
+        DEFAULT_DICE_SUBJECT.into()
+    } else {
+        device.dice_subject.trim().to_owned()
+    };
     device.vbmeta_digest = device
         .vbmeta_digest
         .as_deref()
@@ -494,16 +547,23 @@ fn normalize_output_path(value: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceInfo, KeySource, ProfileData, normalize_output_path, normalize_profile,
-        normalize_server_url,
+        DEFAULT_DICE_ISSUER, DEFAULT_DICE_SUBJECT, DEFAULT_GENERIC_BOOT_PATCH_LEVEL,
+        DEFAULT_GENERIC_FINGERPRINT, DEFAULT_GENERIC_SYSTEM_PATCH_LEVEL,
+        DEFAULT_GENERIC_VENDOR_PATCH_LEVEL, DeviceInfo, DiceCurve, KeySource, ProfileData,
+        normalize_output_path, normalize_profile, normalize_server_url,
     };
 
     #[test]
-    fn default_profile_is_blank() {
+    fn default_profile_uses_generic_rkp_defaults() {
         let profile = ProfileData::default();
         assert!(matches!(profile.key_source, KeySource::Unset));
+        assert_eq!(profile.curve, DiceCurve::Ed25519);
         assert_eq!(profile.device, DeviceInfo::default());
-        assert!(profile.fingerprint.value.is_empty());
+        assert_eq!(
+            profile.device.system_patch_level,
+            DEFAULT_GENERIC_SYSTEM_PATCH_LEVEL
+        );
+        assert_eq!(profile.fingerprint.value, DEFAULT_GENERIC_FINGERPRINT);
         assert_eq!(profile.num_keys, 1);
     }
 
@@ -548,9 +608,23 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(profile.device.boot_patch_level, 0);
+        assert_eq!(
+            profile.device.boot_patch_level,
+            DEFAULT_GENERIC_BOOT_PATCH_LEVEL
+        );
         assert_eq!(profile.device.system_patch_level, 202601);
-        assert_eq!(profile.device.vendor_patch_level, 0);
+        assert_eq!(
+            profile.device.vendor_patch_level,
+            DEFAULT_GENERIC_VENDOR_PATCH_LEVEL
+        );
+    }
+
+    #[test]
+    fn normalize_profile_applies_default_dice_names() {
+        let profile = normalize_profile(ProfileData::default()).unwrap();
+
+        assert_eq!(profile.device.dice_issuer, DEFAULT_DICE_ISSUER);
+        assert_eq!(profile.device.dice_subject, DEFAULT_DICE_SUBJECT);
     }
 
     #[test]

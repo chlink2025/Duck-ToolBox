@@ -2,6 +2,7 @@ import type {
   ArtifactsData,
   BridgeStatus,
   CommandHistoryEntry,
+  DiceCurve,
   DeviceInfo,
   InfoData,
   KeyboxData,
@@ -26,6 +27,7 @@ export interface UiDeviceInfo extends DeviceInfo {
 
 export interface UiProfile {
   mode: UiMode
+  curve: DiceCurve
   seed_hex: string
   hw_key_hex: string
   kdf_label: string

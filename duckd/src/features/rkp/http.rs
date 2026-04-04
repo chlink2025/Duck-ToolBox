@@ -173,10 +173,9 @@ fn parse_eek_cose_key(entries: &[(Value, Value)], eek_curve: i128) -> Result<Sel
     let key_type = required_cose_int(entries, 1, "EEK key type")?;
     let algorithm = required_cose_int(entries, 3, "EEK algorithm")?;
     let curve_id = required_cose_int(entries, -1, "EEK curve id")?;
-    let key_id = required_cose_bytes(entries, COSE_KEY_ID_LABEL, "EEK key identifier")?.to_vec();
-    if key_id.is_empty() {
-        return Err(anyhow!("EEK key identifier must not be empty"));
-    }
+    let key_id = optional_cose_bytes(entries, COSE_KEY_ID_LABEL, "EEK key identifier")?
+        .unwrap_or_default()
+        .to_vec();
     if algorithm != COSE_ALGORITHM_ECDH_ES_HKDF_256 {
         return Err(anyhow!(
             "EEK algorithm must be {COSE_ALGORITHM_ECDH_ES_HKDF_256}, got {algorithm}"
@@ -251,6 +250,16 @@ fn required_cose_bytes<'a>(
         map_get(entries, key).ok_or_else(|| anyhow!("{label} is missing"))?,
         label,
     )
+}
+
+fn optional_cose_bytes<'a>(
+    entries: &'a [(Value, Value)],
+    key: i128,
+    label: &str,
+) -> Result<Option<&'a [u8]>> {
+    map_get(entries, key)
+        .map(|value| as_bytes(value, label))
+        .transpose()
 }
 
 fn parse_fetch_eek_response(body: &[u8]) -> Result<EekResponse> {
@@ -346,25 +355,31 @@ mod tests {
     };
     use ciborium::value::Value;
 
-    fn eek_payload_x25519(key_id: &[u8], public_key: &[u8]) -> Value {
-        Value::Map(vec![
+    fn eek_payload_x25519(key_id: Option<&[u8]>, public_key: &[u8]) -> Value {
+        let mut entries = vec![
             (int(1), int(1)),
-            (int(2), bytes(key_id.to_vec())),
             (int(3), int(COSE_ALGORITHM_ECDH_ES_HKDF_256)),
             (int(-1), int(COSE_CURVE_X25519)),
             (int(-2), bytes(public_key.to_vec())),
-        ])
+        ];
+        if let Some(key_id) = key_id {
+            entries.insert(1, (int(2), bytes(key_id.to_vec())));
+        }
+        Value::Map(entries)
     }
 
-    fn eek_payload_p256(key_id: &[u8], x: &[u8], y: &[u8]) -> Value {
-        Value::Map(vec![
+    fn eek_payload_p256(key_id: Option<&[u8]>, x: &[u8], y: &[u8]) -> Value {
+        let mut entries = vec![
             (int(1), int(2)),
-            (int(2), bytes(key_id.to_vec())),
             (int(3), int(COSE_ALGORITHM_ECDH_ES_HKDF_256)),
             (int(-1), int(COSE_CURVE_P256)),
             (int(-2), bytes(x.to_vec())),
             (int(-3), bytes(y.to_vec())),
-        ])
+        ];
+        if let Some(key_id) = key_id {
+            entries.insert(1, (int(2), bytes(key_id.to_vec())));
+        }
+        Value::Map(entries)
     }
 
     fn eek_chain_entry(curve: i128, payload: Value) -> Value {
@@ -402,10 +417,10 @@ mod tests {
 
         let body = fetch_eek_response(
             vec![
-                eek_chain_entry(RPC_CURVE_P256, eek_payload_p256(&p256_key_id, &x, &y)),
+                eek_chain_entry(RPC_CURVE_P256, eek_payload_p256(Some(&p256_key_id), &x, &y)),
                 eek_chain_entry(
                     RPC_CURVE_25519,
-                    eek_payload_x25519(&x25519_key_id, &[0x33; 32]),
+                    eek_payload_x25519(Some(&x25519_key_id), &[0x33; 32]),
                 ),
             ],
             &challenge,
@@ -427,7 +442,7 @@ mod tests {
         let body = fetch_eek_response(
             vec![eek_chain_entry(
                 RPC_CURVE_P256,
-                eek_payload_p256(&key_id, &x, &y),
+                eek_payload_p256(Some(&key_id), &x, &y),
             )],
             &challenge,
         );
@@ -451,8 +466,11 @@ mod tests {
 
         let body = fetch_eek_response(
             vec![
-                eek_chain_entry(RPC_CURVE_25519, eek_payload_x25519(&[0x99; 4], &[0x31; 31])),
-                eek_chain_entry(RPC_CURVE_P256, eek_payload_p256(&key_id, &x, &y)),
+                eek_chain_entry(
+                    RPC_CURVE_25519,
+                    eek_payload_x25519(Some(&[0x99; 4]), &[0x31; 31]),
+                ),
+                eek_chain_entry(RPC_CURVE_P256, eek_payload_p256(Some(&key_id), &x, &y)),
             ],
             &challenge,
         );
@@ -461,5 +479,22 @@ mod tests {
         assert_eq!(parsed.eek_curve, RPC_CURVE_P256);
         assert_eq!(parsed.eek_id, key_id);
         assert_eq!(parsed.eek_public.len(), 64);
+    }
+
+    #[test]
+    fn parse_fetch_eek_response_allows_missing_key_identifier() {
+        let challenge = [0xAD; 32];
+        let body = fetch_eek_response(
+            vec![eek_chain_entry(
+                RPC_CURVE_25519,
+                eek_payload_x25519(None, &[0x42; 32]),
+            )],
+            &challenge,
+        );
+
+        let parsed = parse_fetch_eek_response(&body).unwrap();
+        assert_eq!(parsed.eek_curve, RPC_CURVE_25519);
+        assert_eq!(parsed.eek_public, vec![0x42; 32]);
+        assert!(parsed.eek_id.is_empty());
     }
 }

@@ -10,8 +10,8 @@ use serde::Serialize;
 use super::{
     cbor::{as_array, as_bytes, as_i128, as_map, as_text, decode, encode, map_get, map_get_text},
     cose_dice::{
-        ALG_EDDSA, ALG_ES256, CWT_ISSUER, CWT_SUBJECT, DICE_KEY_USAGE, DICE_PROFILE_NAME,
-        DICE_SUBJECT_PUB_KEY, build_sig_structure,
+        ALG_EDDSA, ALG_ES256, CWT_ISSUER, CWT_SUBJECT, DICE_KEY_USAGE, DICE_SUBJECT_PUB_KEY,
+        build_sig_structure,
     },
 };
 
@@ -25,6 +25,7 @@ const P256_COORD_LEN: usize = 32;
 const P384_COORD_LEN: usize = 48;
 const MAX_CHALLENGE_LEN: usize = 64;
 const TEST_KEY_LABEL: i128 = -70000;
+const DICE_PROFILE_NAME: i128 = -4_670_554;
 const ANDROID_DICE_PROFILE_VERSION: &str = "android.15";
 
 #[derive(Debug, Clone, Serialize)]
@@ -401,12 +402,13 @@ fn parse_dice_entry_payload(value: &Value, label: &str) -> Result<CosePublicKeyI
         return Err(anyhow!("{label} subject must not be empty"));
     }
 
-    let profile_name =
-        required_int_text(payload_entries, DICE_PROFILE_NAME, label, "profile name")?;
-    if profile_name != ANDROID_DICE_PROFILE_VERSION {
-        return Err(anyhow!(
-            "{label} profile name must be `{ANDROID_DICE_PROFILE_VERSION}`, got `{profile_name}`"
-        ));
+    if let Some(profile_name) = map_get(payload_entries, DICE_PROFILE_NAME) {
+        let profile_name = as_text(profile_name, &format!("{label} profile name"))?;
+        if profile_name != ANDROID_DICE_PROFILE_VERSION {
+            return Err(anyhow!(
+                "{label} profile name must be `{ANDROID_DICE_PROFILE_VERSION}`, got `{profile_name}`"
+            ));
+        }
     }
 
     let key_usage = required_int_bytes(payload_entries, DICE_KEY_USAGE, label, "key usage")?;
@@ -510,12 +512,14 @@ fn validate_device_info(value: &Value) -> Result<String> {
     )?;
     validate_choice("security_level", security_level, &["tee", "strongbox"])?;
 
-    let vbmeta_digest = required_bytes_field(entries, "vbmeta_digest")?;
-    if vbmeta_digest.len() != 32 {
-        return Err(anyhow!(
-            "DeviceInfo field `vbmeta_digest` must be 32 bytes, got {}",
-            vbmeta_digest.len()
-        ));
+    if let Some(vbmeta_digest) = map_get_text(entries, "vbmeta_digest") {
+        let vbmeta_digest = as_bytes(vbmeta_digest, "vbmeta_digest")?;
+        if vbmeta_digest.len() != 32 {
+            return Err(anyhow!(
+                "DeviceInfo field `vbmeta_digest` must be 32 bytes, got {}",
+                vbmeta_digest.len()
+            ));
+        }
     }
 
     let os_version = map_get_text(entries, "os_version")
@@ -545,9 +549,9 @@ fn validate_device_info(value: &Value) -> Result<String> {
     }
 
     let expected_len = if security_level == "tee" {
-        entries.len() == 14
-    } else {
         matches!(entries.len(), 13 | 14)
+    } else {
+        matches!(entries.len(), 12..=14)
     };
     if !expected_len {
         return Err(anyhow!(
@@ -698,13 +702,6 @@ fn required_text_field<'a>(entries: &'a [(Value, Value)], key: &str) -> Result<&
     )
 }
 
-fn required_bytes_field<'a>(entries: &'a [(Value, Value)], key: &str) -> Result<&'a [u8]> {
-    as_bytes(
-        map_get_text(entries, key).ok_or_else(|| anyhow!("DeviceInfo field `{key}` is missing"))?,
-        key,
-    )
-}
-
 fn required_uint_field(entries: &[(Value, Value)], key: &str) -> Result<u32> {
     let value = as_i128(
         map_get_text(entries, key).ok_or_else(|| anyhow!("DeviceInfo field `{key}` is missing"))?,
@@ -844,11 +841,11 @@ fn ensure_allowed_integer_keys(
 #[cfg(test)]
 mod tests {
     use super::verify_csr;
-    use crate::runtime::profile::DeviceInfo;
+    use crate::runtime::profile::{DeviceInfo, DiceCurve};
 
     use super::super::{
         cbor::{bytes, decode, encode, int},
-        cose_dice::{DeviceKeys, build_csr, generate_ec_keypair},
+        cose_dice::{DeviceKeys, RPC_CURVE_25519, build_csr, generate_ec_keypair},
     };
     use ciborium::ser::into_writer;
     use ciborium::value::Value;
@@ -1006,6 +1003,48 @@ mod tests {
         let tampered = encode(&decoded).unwrap();
         let error = verify_csr(&tampered).unwrap_err();
         assert!(error.to_string().contains("non-canonical"));
+    }
+
+    #[test]
+    fn verify_allows_missing_vbmeta_digest() {
+        let keys = DeviceKeys::from_seed([0x11; 32]);
+        let ec_key = generate_ec_keypair().unwrap();
+        let mut device = valid_device_info();
+        device.vbmeta_digest = None;
+
+        let csr = build_csr(
+            &keys,
+            &[0x44; 32],
+            &[ec_key.cose_public],
+            &[0x55; 32],
+            &[0x66; 8],
+            &device,
+            RPC_CURVE_25519,
+        )
+        .unwrap();
+
+        let report = verify_csr(&csr.csr_bytes).unwrap();
+        assert!(report.signature_valid);
+    }
+
+    #[test]
+    fn verify_accepts_p256_dice_chain() {
+        let keys = DeviceKeys::from_seed_with_curve([0x11; 32], DiceCurve::P256);
+        let ec_key = generate_ec_keypair().unwrap();
+
+        let csr = build_csr(
+            &keys,
+            &[0x44; 32],
+            &[ec_key.cose_public],
+            &[0x55; 32],
+            &[0x66; 8],
+            &valid_device_info(),
+            RPC_CURVE_25519,
+        )
+        .unwrap();
+
+        let report = verify_csr(&csr.csr_bytes).unwrap();
+        assert!(report.signature_valid);
     }
 
     #[test]

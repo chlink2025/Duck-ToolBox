@@ -99,10 +99,6 @@ function handleReplacePrompt(value: string | number) {
         <span class="summary-label">{{ t("status.certificateCount") }}</span>
         <strong>{{ state.keyboxResult.chain_summary.certificates }}</strong>
       </div>
-      <div class="kv-item">
-        <span class="summary-label">{{ t("keybox.comment") }}</span>
-        <p class="mono-inline">{{ t("keybox.commentValue") }}</p>
-      </div>
     </div>
     <p v-else class="empty-copy">
       {{ t("keybox.empty") }}

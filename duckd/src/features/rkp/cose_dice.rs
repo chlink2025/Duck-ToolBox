@@ -3,18 +3,26 @@ use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
 };
 use anyhow::{Context, Result, anyhow};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer as Ed25519Signer, SigningKey};
 use hkdf::Hkdf;
 use hkdf::hmac::{Hmac, Mac};
 use p256::{
-    PublicKey as P256PublicKey, SecretKey as P256SecretKey, ecdh::diffie_hellman,
-    ecdsa::SigningKey as P256SigningKey, elliptic_curve::sec1::ToEncodedPoint,
+    NonZeroScalar as P256NonZeroScalar, PublicKey as P256PublicKey, SecretKey as P256SecretKey,
+    U256 as P256U256,
+    ecdh::diffie_hellman,
+    ecdsa::{
+        Signature as P256Signature, SigningKey as P256SigningKey, signature::Signer as P256Signer,
+    },
+    elliptic_curve::{ops::Reduce, sec1::ToEncodedPoint},
 };
 use serde::Serialize;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
-use crate::runtime::{errors::AppError, profile::DeviceInfo};
+use crate::runtime::{
+    errors::AppError,
+    profile::{DeviceInfo, DiceCurve},
+};
 
 use super::cbor::{bytes, empty_map, encode, int, text};
 
@@ -25,18 +33,22 @@ pub const ALG_HMAC_256: i128 = 5;
 pub const ALG_ECDH_ES_HKDF_256: i128 = -25;
 pub const CWT_ISSUER: i128 = 1;
 pub const CWT_SUBJECT: i128 = 2;
-pub const DICE_PROFILE_NAME: i128 = -4_670_554;
 pub const DICE_SUBJECT_PUB_KEY: i128 = -4_670_552;
 pub const DICE_KEY_USAGE: i128 = -4_670_553;
 pub const RPC_CURVE_P256: i128 = 1;
 pub const RPC_CURVE_25519: i128 = 2;
-const ANDROID_DICE_PROFILE_VERSION: &str = "android.15";
+
+#[derive(Debug, Clone)]
+enum DeviceKeyMaterial {
+    Ed25519(SigningKey),
+    P256(P256SigningKey),
+}
 
 #[derive(Debug, Clone)]
 pub struct DeviceKeys {
     seed: [u8; 32],
-    signing_key: SigningKey,
-    verifying_key: VerifyingKey,
+    curve: DiceCurve,
+    material: DeviceKeyMaterial,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,12 +80,34 @@ pub struct CsrBundle {
 
 impl DeviceKeys {
     pub fn from_seed(seed: [u8; 32]) -> Self {
-        let signing_key = SigningKey::from_bytes(&seed);
-        let verifying_key = signing_key.verifying_key();
+        Self::from_seed_with_curve(seed, DiceCurve::Ed25519)
+    }
+
+    pub fn from_seed_with_curve(seed: [u8; 32], curve: DiceCurve) -> Self {
+        let material = match curve {
+            DiceCurve::Ed25519 => DeviceKeyMaterial::Ed25519(SigningKey::from_bytes(&seed)),
+            DiceCurve::P256 => {
+                let scalar = <P256NonZeroScalar as Reduce<P256U256>>::reduce_bytes(&seed.into());
+                let secret_key: P256SecretKey = scalar.into();
+                DeviceKeyMaterial::P256(P256SigningKey::from(secret_key))
+            }
+        };
+
         Self {
             seed,
-            signing_key,
-            verifying_key,
+            curve,
+            material,
+        }
+    }
+
+    pub fn curve(&self) -> DiceCurve {
+        self.curve
+    }
+
+    pub fn algorithm(&self) -> i128 {
+        match self.curve {
+            DiceCurve::Ed25519 => ALG_EDDSA,
+            DiceCurve::P256 => ALG_ES256,
         }
     }
 
@@ -82,24 +116,69 @@ impl DeviceKeys {
     }
 
     pub fn public_key_hex(&self) -> String {
-        hex::encode(self.verifying_key.to_bytes())
+        hex::encode(self.public_key_bytes())
     }
 
-    pub fn public_key_bytes(&self) -> [u8; 32] {
-        self.verifying_key.to_bytes()
+    pub fn public_key_bytes(&self) -> Vec<u8> {
+        match &self.material {
+            DeviceKeyMaterial::Ed25519(signing_key) => {
+                signing_key.verifying_key().to_bytes().to_vec()
+            }
+            DeviceKeyMaterial::P256(signing_key) => {
+                let encoded = signing_key.verifying_key().to_encoded_point(false);
+                let x = encoded
+                    .x()
+                    .expect("P-256 verifying key must have an x coordinate");
+                let y = encoded
+                    .y()
+                    .expect("P-256 verifying key must have a y coordinate");
+
+                let mut public_key = Vec::with_capacity(64);
+                public_key.extend_from_slice(x);
+                public_key.extend_from_slice(y);
+                public_key
+            }
+        }
     }
 
     pub fn sign(&self, payload: &[u8]) -> Vec<u8> {
-        self.signing_key.sign(payload).to_bytes().to_vec()
+        match &self.material {
+            DeviceKeyMaterial::Ed25519(signing_key) => Ed25519Signer::sign(signing_key, payload)
+                .to_bytes()
+                .to_vec(),
+            DeviceKeyMaterial::P256(signing_key) => {
+                let signature: P256Signature = P256Signer::sign(signing_key, payload);
+                signature.to_bytes().to_vec()
+            }
+        }
     }
 
     pub fn cose_key(&self) -> ciborium::value::Value {
-        ciborium::value::Value::Map(vec![
-            (int(1), int(1)),
-            (int(3), int(ALG_EDDSA)),
-            (int(-1), int(6)),
-            (int(-2), bytes(self.public_key_bytes().to_vec())),
-        ])
+        match &self.material {
+            DeviceKeyMaterial::Ed25519(_) => ciborium::value::Value::Map(vec![
+                (int(1), int(1)),
+                (int(3), int(ALG_EDDSA)),
+                (int(-1), int(6)),
+                (int(-2), bytes(self.public_key_bytes())),
+            ]),
+            DeviceKeyMaterial::P256(signing_key) => {
+                let encoded = signing_key.verifying_key().to_encoded_point(false);
+                let x = encoded
+                    .x()
+                    .expect("P-256 verifying key must have an x coordinate");
+                let y = encoded
+                    .y()
+                    .expect("P-256 verifying key must have a y coordinate");
+
+                ciborium::value::Value::Map(vec![
+                    (int(1), int(2)),
+                    (int(3), int(ALG_ES256)),
+                    (int(-1), int(1)),
+                    (int(-2), bytes(x.to_vec())),
+                    (int(-3), bytes(y.to_vec())),
+                ])
+            }
+        }
     }
 }
 
@@ -166,7 +245,7 @@ pub fn build_csr(
     ]))?;
     let signed_data = cose_sign1(
         |payload| Ok(keys.sign(payload)),
-        vec![(int(1), int(ALG_EDDSA))],
+        vec![(int(1), int(keys.algorithm()))],
         signed_payload,
     )?;
 
@@ -211,15 +290,6 @@ pub fn device_info_to_cbor(device_info: &DeviceInfo) -> Result<ciborium::value::
             text(device_info.bootloader_state.clone()),
         ),
         (
-            text("vbmeta_digest"),
-            bytes(hex::decode(
-                device_info
-                    .vbmeta_digest
-                    .as_deref()
-                    .ok_or(AppError::MissingDeviceField("vbmeta_digest"))?,
-            )?),
-        ),
-        (
             text("system_patch_level"),
             int(i128::from(device_info.system_patch_level)),
         ),
@@ -237,6 +307,10 @@ pub fn device_info_to_cbor(device_info: &DeviceInfo) -> Result<ciborium::value::
         ),
         (text("fused"), int(i128::from(device_info.fused))),
     ];
+
+    if let Some(vbmeta_digest) = device_info.vbmeta_digest.as_deref() {
+        entries.push((text("vbmeta_digest"), bytes(hex::decode(vbmeta_digest)?)));
+    }
 
     if !device_info.os_version.trim().is_empty() {
         entries.push((text("os_version"), text(device_info.os_version.clone())));
@@ -256,14 +330,13 @@ fn build_dice_entry(keys: &DeviceKeys, device_info: &DeviceInfo) -> Result<cibor
     let payload = encode(&ciborium::value::Value::Map(vec![
         (int(CWT_ISSUER), text(device_info.dice_issuer.clone())),
         (int(CWT_SUBJECT), text(device_info.dice_subject.clone())),
-        (int(DICE_PROFILE_NAME), text(ANDROID_DICE_PROFILE_VERSION)),
         (int(DICE_SUBJECT_PUB_KEY), bytes(encode(&keys.cose_key())?)),
         (int(DICE_KEY_USAGE), bytes(vec![0x20])),
     ]))?;
 
     cose_sign1(
         |bytes| Ok(keys.sign(bytes)),
-        vec![(int(1), int(ALG_EDDSA))],
+        vec![(int(1), int(keys.algorithm()))],
         payload,
     )
 }
@@ -281,8 +354,10 @@ fn build_protected_data(
     let keys_to_sign_cbor = encode(&ciborium::value::Value::Array(keys_to_sign.to_vec()))?;
     let mac_key = random_bytes_array::<32>()?;
     let keys_to_sign_mac = build_keys_to_sign_mac(&mac_key, &keys_to_sign_cbor)?;
-    let signed_mac_protected =
-        encode(&ciborium::value::Value::Map(vec![(int(1), int(ALG_EDDSA))]))?;
+    let signed_mac_protected = encode(&ciborium::value::Value::Map(vec![(
+        int(1),
+        int(keys.algorithm()),
+    )]))?;
     let signed_mac_aad = encode(&ciborium::value::Value::Array(vec![
         bytes(challenge.to_vec()),
         device_info_to_cbor(device_info)?,
@@ -304,10 +379,6 @@ fn build_protected_data(
         signed_mac,
         dice.clone(),
     ]))?;
-
-    if eek_key_id.is_empty() {
-        return Err(anyhow!("EEK key identifier must not be empty"));
-    }
 
     let (ephemeral_public, sender_cose_key, aes_key) =
         derive_transport_key(eek_curve, eek_pub_bytes)?;
@@ -339,12 +410,13 @@ fn build_protected_data(
         int(1),
         int(ALG_ECDH_ES_HKDF_256),
     )]))?;
+    let mut recipient_unprotected = vec![(int(-1), sender_cose_key)];
+    if !eek_key_id.is_empty() {
+        recipient_unprotected.push((int(4), bytes(eek_key_id.to_vec())));
+    }
     let recipient = ciborium::value::Value::Array(vec![
         bytes(recipient_protected),
-        ciborium::value::Value::Map(vec![
-            (int(-1), sender_cose_key),
-            (int(4), bytes(eek_key_id.to_vec())),
-        ]),
+        ciborium::value::Value::Map(recipient_unprotected),
         ciborium::value::Value::Null,
     ]);
     let encrypt = ciborium::value::Value::Array(vec![
@@ -530,10 +602,10 @@ fn build_keys_to_sign_mac(mac_key: &[u8; 32], keys_to_sign_cbor: &[u8]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        DICE_PROFILE_NAME, DeviceKeys, RPC_CURVE_25519, RPC_CURVE_P256, build_csr,
-        build_sig_structure, device_info_to_cbor, generate_ec_keypair,
+        DeviceKeys, RPC_CURVE_25519, RPC_CURVE_P256, build_csr, build_sig_structure,
+        device_info_to_cbor, generate_ec_keypair,
     };
-    use crate::runtime::profile::DeviceInfo;
+    use crate::runtime::profile::{DeviceInfo, DiceCurve};
     use p256::elliptic_curve::sec1::ToEncodedPoint;
 
     use super::super::cbor::{encode, map_get_text};
@@ -600,6 +672,22 @@ mod tests {
     }
 
     #[test]
+    fn device_info_cbor_omits_missing_vbmeta_digest() {
+        let mut device = valid_device_info();
+        device.vbmeta_digest = None;
+
+        let value = device_info_to_cbor(&device).unwrap();
+        let Value::Map(entries) = value else {
+            panic!("device info must encode as a map");
+        };
+        assert!(
+            !entries
+                .iter()
+                .any(|(key, _)| matches!(key, Value::Text(text) if text == "vbmeta_digest"))
+        );
+    }
+
+    #[test]
     fn built_csr_produces_bytes() {
         let keys = DeviceKeys::from_seed([0x11; 32]);
         let ec = generate_ec_keypair().unwrap();
@@ -616,6 +704,17 @@ mod tests {
         .unwrap();
         assert!(!bundle.csr_bytes.is_empty());
         assert!(bundle.protected_data_len > 0);
+    }
+
+    #[test]
+    fn device_keys_support_p256_curve() {
+        let keys = DeviceKeys::from_seed_with_curve([0x11; 32], DiceCurve::P256);
+        let public_key = keys.public_key_bytes();
+
+        assert_eq!(keys.curve(), DiceCurve::P256);
+        assert_eq!(keys.algorithm(), super::ALG_ES256);
+        assert_eq!(public_key.len(), 64);
+        assert!(!keys.sign(b"duck").is_empty());
     }
 
     #[test]
@@ -671,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn dice_entry_payload_includes_android_profile_name() {
+    fn dice_entry_payload_omits_profile_name_like_reference_tool() {
         let keys = DeviceKeys::from_seed([0x11; 32]);
         let device = valid_device_info();
         let Value::Array(chain) = super::build_dice_chain(&keys, &device).unwrap() else {
@@ -688,14 +787,9 @@ mod tests {
         let Value::Map(entries) = decoded else {
             panic!("DICE payload must decode as a map");
         };
-        let profile =
-            super::super::cbor::map_get(&entries, DICE_PROFILE_NAME).and_then(
-                |value| match value {
-                    Value::Text(text) => Some(text.as_str()),
-                    _ => None,
-                },
-            );
 
-        assert_eq!(profile, Some("android.15"));
+        assert!(entries.iter().all(
+            |(key, _)| !matches!(key, Value::Integer(number) if i128::try_from(*number).ok() == Some(-4_670_554))
+        ));
     }
 }

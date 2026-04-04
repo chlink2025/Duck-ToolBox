@@ -109,7 +109,6 @@ pub fn build_keybox_xml(
 
     let mut xml = String::new();
     writeln!(xml, "<?xml version=\"1.0\"?>").unwrap();
-    writeln!(xml, "<!-- Made by Eltavine & MhmRdd -->").unwrap();
     writeln!(xml, "<AndroidAttestation>").unwrap();
     writeln!(xml, "    <NumberOfKeyboxes>1</NumberOfKeyboxes>").unwrap();
     writeln!(xml, "    <Keybox DeviceID=\"{device_id}\">").unwrap();
@@ -304,7 +303,6 @@ mod tests {
             issuer_summary: "root".into(),
         };
         let xml = build_keybox_xml(&secret_key, &[cert], "duck-123").unwrap();
-        assert!(xml.contains("Made by Eltavine & MhmRdd"));
         assert!(xml.contains("<AndroidAttestation>"));
         assert!(xml.contains("DeviceID=\"duck-123\""));
         assert!(xml.contains("<CertificateChain>"));

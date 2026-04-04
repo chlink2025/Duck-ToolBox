@@ -19,6 +19,7 @@ import {
   bootloaderStateOptions,
   choiceDescription,
   choiceLabel,
+  curveOptions,
   keySourceOptions,
   numKeysOptions,
   securityLevelOptions,
@@ -34,6 +35,7 @@ const props = defineProps<{
 
 type DialogId =
   | "mode"
+  | "curve"
   | "security"
   | "verified-boot"
   | "bootloader"
@@ -78,6 +80,8 @@ const choiceOptions = computed<DialogOption[]>(() => {
   const options =
     dialogId.value === "mode"
       ? keySourceOptions
+      : dialogId.value === "curve"
+        ? curveOptions
       : dialogId.value === "security"
         ? securityLevelOptions
         : dialogId.value === "verified-boot"
@@ -99,6 +103,8 @@ const dialogTitle = computed(() => {
   switch (dialogId.value) {
     case "mode":
       return t("profile.dialogKeySourceTitle")
+    case "curve":
+      return t("profile.dialogCurveTitle")
     case "security":
       return t("profile.dialogSecurityTitle")
     case "verified-boot":
@@ -116,6 +122,8 @@ const dialogDescription = computed(() => {
   switch (dialogId.value) {
     case "mode":
       return t("profile.dialogKeySourceDescription")
+    case "curve":
+      return t("profile.dialogCurveDescription")
     case "security":
       return t("profile.dialogSecurityDescription")
     case "verified-boot":
@@ -133,6 +141,8 @@ const dialogSelected = computed<string | number | null>(() => {
   switch (dialogId.value) {
     case "mode":
       return props.state.profile.mode
+    case "curve":
+      return props.state.profile.curve
     case "security":
       return props.state.profile.device.security_level || "tee"
     case "verified-boot":
@@ -151,6 +161,12 @@ const keySourceLabel = computed(() =>
 )
 const keySourceDescription = computed(() =>
   choiceDescription(keySourceOptions, props.state.profile.mode, t),
+)
+const curveLabel = computed(() =>
+  choiceLabel(curveOptions, props.state.profile.curve, t),
+)
+const curveDescription = computed(() =>
+  choiceDescription(curveOptions, props.state.profile.curve, t),
 )
 const securityLevelLabel = computed(() =>
   choiceLabel(
@@ -253,6 +269,9 @@ function applyDialogSelection(value: string | number) {
     case "mode":
       updateMode(value as UiMode)
       break
+    case "curve":
+      props.state.profile.curve = String(value) as "ed25519" | "p256"
+      break
     case "security":
       props.state.profile.device.security_level = String(value)
       break
@@ -338,6 +357,16 @@ function updateDeviceField(key: string, value: string) {
         <span class="field-label">{{ t("profile.keySource") }}</span>
         <strong class="choice-value">{{ keySourceLabel }}</strong>
         <p class="body-copy">{{ keySourceDescription }}</p>
+        <span class="choice-action">
+          {{ t("profile.changeChoice") }}
+          <ChevronDown class="size-4" />
+        </span>
+      </button>
+
+      <button class="choice-card" type="button" :disabled="state.bridge.mode === 'unavailable'" @click="openDialog('curve')">
+        <span class="field-label">{{ t("profile.curve") }}</span>
+        <strong class="choice-value">{{ curveLabel }}</strong>
+        <p class="body-copy">{{ curveDescription }}</p>
         <span class="choice-action">
           {{ t("profile.changeChoice") }}
           <ChevronDown class="size-4" />

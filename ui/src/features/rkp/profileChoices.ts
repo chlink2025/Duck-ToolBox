@@ -1,3 +1,4 @@
+import type { DiceCurve } from "@/lib/types"
 import type { UiMode } from "./types"
 
 export interface ChoiceOption<T extends string | number> {
@@ -60,6 +61,19 @@ export const bootloaderStateOptions: ChoiceOption<string>[] = [
     value: "unlocked",
     labelKey: "choices.bootUnlockedLabel",
     descriptionKey: "choices.bootUnlockedDescription",
+  },
+]
+
+export const curveOptions: ChoiceOption<DiceCurve>[] = [
+  {
+    value: "ed25519",
+    labelKey: "choices.curveEd25519Label",
+    descriptionKey: "choices.curveEd25519Description",
+  },
+  {
+    value: "p256",
+    labelKey: "choices.curveP256Label",
+    descriptionKey: "choices.curveP256Description",
   },
 ]
 
